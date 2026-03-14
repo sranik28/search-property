@@ -1,0 +1,43 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model City {
+  id         Int        @id @default(autoincrement())
+  name       String
+  slug       String     @unique
+  latitude   Float
+  longitude  Float
+  zoomLevel  Int        @default(12)
+  createdAt  DateTime   @default(now())
+  properties Property[]
+}
+
+model Property {
+  id          Int      @id @default(autoincrement())
+  title       String
+  slug        String   @unique
+  price       Float
+  city        String
+  citySlug    String?
+  address     String
+  latitude    Float
+  longitude   Float
+  bedrooms    Int
+  bathrooms   Float
+  area_sqft   Int
+  description String
+  images      String   @default("[]")
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  boundary    String?  @default("null")
+  plotNumber  String?
+  cityRel     City?    @relation(fields: [citySlug], references: [slug])
+}
