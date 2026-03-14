@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useCallback } from 'react'
-import mapboxgl from 'mapbox-gl'
+import maplibregl from 'maplibre-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
-import 'mapbox-gl/dist/mapbox-gl.css'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
-import { MAPBOX_TOKEN, DEFAULT_MAP_STYLE, formatPrice } from '@/lib/mapbox'
+import { DEFAULT_MAP_STYLE, formatPrice } from '@/lib/mapbox'
 import { useMapStore, Property } from '@/store/mapStore'
 import PropertyPopup from './PropertyPopup'
 import { createRoot } from 'react-dom/client'
@@ -17,11 +17,11 @@ interface MapComponentProps {
 }
 
 export default function MapComponent({ centerLat, centerLng, zoom }: MapComponentProps) {
-  const mapRef = useRef<mapboxgl.Map | null>(null)
+  const mapRef = useRef<maplibregl.Map | null>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const drawRef = useRef<MapboxDraw | null>(null)
-  const markersRef = useRef<Record<number, mapboxgl.Marker>>({})
-  const popupRef = useRef<mapboxgl.Popup | null>(null)
+  const markersRef = useRef<Record<number, maplibregl.Marker>>({})
+  const popupRef = useRef<maplibregl.Popup | null>(null)
   const popupRootRef = useRef<ReturnType<typeof createRoot> | null>(null)
 
   const {
@@ -52,17 +52,15 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return
 
-    mapboxgl.accessToken = MAPBOX_TOKEN
-
-    const map = new mapboxgl.Map({
+    const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: DEFAULT_MAP_STYLE,
       center: [centerLng, centerLat],
       zoom,
     })
 
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    map.addControl(new mapboxgl.FullscreenControl(), 'top-right')
+    map.addControl(new maplibregl.NavigationControl(), 'top-right')
+    map.addControl(new maplibregl.FullscreenControl(), 'top-right')
 
     const draw = new MapboxDraw({
       displayControlsDefault: false,
@@ -70,6 +68,7 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
       defaultMode: 'simple_select',
     })
     drawRef.current = draw
+    map.addControl(draw as any)
 
     map.on('load', () => {
       // Add clustering source safely
@@ -118,12 +117,11 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
         const features = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })
         if (!features.length) return
         const clusterId = features[0].properties?.cluster_id
-        const source = map.getSource('properties') as mapboxgl.GeoJSONSource
-        source.getClusterExpansionZoom(clusterId, (err, z) => {
-          if (err) return
+        const source = map.getSource('properties') as maplibregl.GeoJSONSource
+        source.getClusterExpansionZoom(clusterId).then((z) => {
           const geom = features[0].geometry as GeoJSON.Point
           map.easeTo({ center: geom.coordinates as [number, number], zoom: z ?? 12 })
-        })
+        }).catch(err => console.error('Cluster expansion error', err))
       })
 
       map.on('mouseenter', 'clusters', () => { map.getCanvas().style.cursor = 'pointer' })
@@ -136,7 +134,6 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
       // Re-initialize sources/layers on style load if they are missing
       updateMapData()
     })
-
 
     map.on('moveend', fetchBoundsProperties)
     map.on('zoomend', fetchBoundsProperties)
@@ -179,7 +176,7 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
       />
     )
 
-    const popup = new mapboxgl.Popup({ offset: 15, closeButton: false, maxWidth: '320px' })
+    const popup = new maplibregl.Popup({ offset: 15, closeButton: false, maxWidth: '320px' })
       .setLngLat([property.longitude, property.latitude])
       .setDOMContent(popupNode)
       .addTo(map)
@@ -271,13 +268,11 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
 
     console.log('Rendering plots:', plotFeatures.length, plotFeatures)
 
-    const plotSource = map.getSource('plot-boundaries') as mapboxgl.GeoJSONSource
+    const plotSource = map.getSource('plot-boundaries') as maplibregl.GeoJSONSource
     if (plotSource) plotSource.setData({ type: 'FeatureCollection', features: plotFeatures })
 
-    // ... existing clustering and marker logic
-
     // 2. Update Clustering Source
-    const clusterSource = map.getSource('properties') as mapboxgl.GeoJSONSource
+    const clusterSource = map.getSource('properties') as maplibregl.GeoJSONSource
     if (clusterSource) {
       const features = properties.map((p) => ({
         type: 'Feature',
@@ -298,7 +293,7 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
       el.addEventListener('click', () => handlePropertyInteraction(property))
       el.addEventListener('mouseenter', () => handlePropertyInteraction(property))
 
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'center' })
+      const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat([property.longitude, property.latitude])
         .addTo(map)
       markersRef.current[property.id] = marker
@@ -310,100 +305,16 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
     updateMapData()
   }, [updateMapData])
 
-  // Initialize map
+  // React to flyToLocation
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return
-    mapboxgl.accessToken = MAPBOX_TOKEN
-
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: DEFAULT_MAP_STYLE,
-      center: [centerLng, centerLat],
-      zoom,
-    })
-
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
-    map.addControl(new mapboxgl.FullscreenControl(), 'top-right')
-
-    map.on('load', () => {
-      if (!map.getSource('properties')) {
-        map.addSource('properties', {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] },
-          cluster: true,
-          clusterMaxZoom: 14,
-          clusterRadius: 50,
-        })
-
-        map.addLayer({
-          id: 'clusters',
-          type: 'circle',
-          source: 'properties',
-          filter: ['has', 'point_count'],
-          paint: {
-            'circle-color': ['step', ['get', 'point_count'], '#10b981', 10, '#f59e0b', 30, '#ef4444'],
-            'circle-radius': ['step', ['get', 'point_count'], 24, 10, 30, 30, 38],
-            'circle-stroke-width': 3,
-            'circle-stroke-color': '#fff',
-          },
-        })
-
-        map.addLayer({
-          id: 'cluster-count',
-          type: 'symbol',
-          source: 'properties',
-          filter: ['has', 'point_count'],
-          layout: {
-            'text-field': '{point_count_abbreviated}',
-            'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
-            'text-size': 13,
-          },
-          paint: { 'text-color': '#fff' },
-        })
-
-        map.on('click', 'clusters', (e) => {
-          const features = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })
-          const clusterId = features[0].properties?.cluster_id
-          const source = map.getSource('properties') as mapboxgl.GeoJSONSource
-          source.getClusterExpansionZoom(clusterId, (err, z) => {
-            if (err) return
-            const geom = features[0].geometry as GeoJSON.Point
-            map.easeTo({ center: geom.coordinates as [number, number], zoom: z ?? 12 })
-          })
-        })
-
-        map.on('mouseenter', 'clusters', () => { map.getCanvas().style.cursor = 'pointer' })
-        map.on('mouseleave', 'clusters', () => { map.getCanvas().style.cursor = '' })
-      }
-      updateMapData()
-    })
-
-    map.on('style.load', updateMapData)
-    map.on('moveend', fetchBoundsProperties)
-    map.on('zoomend', fetchBoundsProperties)
-
-    const draw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: { polygon: true, trash: true },
-      defaultMode: 'simple_select',
-    })
-    drawRef.current = draw
-
-    map.on('draw.create', (e: any) => {
-      const polygon = e.features[0]?.geometry as GeoJSON.Polygon
-      if (polygon?.coordinates?.[0]) {
-        setDrawnPolygon(polygon.coordinates[0] as number[][])
-        setIsDrawMode(false)
-      }
-    })
-    map.on('draw.delete', () => {
-      setDrawnPolygon(null)
-    })
-
-    mapRef.current = map
-    return () => { map.remove(); mapRef.current = null }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (flyToLocation && mapRef.current) {
+      mapRef.current.flyTo({
+        center: [flyToLocation.lng, flyToLocation.lat],
+        zoom: flyToLocation.zoom,
+      })
+      setFlyToLocation(null)
+    }
+  }, [flyToLocation, setFlyToLocation])
 
   // Highlight hovered marker
   useEffect(() => {
@@ -416,17 +327,6 @@ export default function MapComponent({ centerLat, centerLng, zoom }: MapComponen
       }
     })
   }, [hoveredPropertyId])
-
-  // React to flyToLocation
-  useEffect(() => {
-    if (flyToLocation && mapRef.current) {
-      mapRef.current.flyTo({
-        center: [flyToLocation.lng, flyToLocation.lat],
-        zoom: flyToLocation.zoom,
-      })
-      setFlyToLocation(null)
-    }
-  }, [flyToLocation, setFlyToLocation])
 
   return (
     <div ref={mapContainerRef} className="w-full h-full rounded-none" />

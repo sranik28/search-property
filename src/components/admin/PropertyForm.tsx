@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation'
 import axios from 'axios'
 import dynamic from 'next/dynamic'
 import { Upload, X, MapPin, Save } from 'lucide-react'
-import { MAPBOX_TOKEN, DEFAULT_MAP_STYLE } from '@/lib/mapbox'
-import mapboxgl from 'mapbox-gl'
+import { DEFAULT_MAP_STYLE } from '@/lib/mapbox'
+import maplibregl from 'maplibre-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
-import 'mapbox-gl/dist/mapbox-gl.css'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
 
 interface City {
@@ -60,9 +60,9 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
   })
 
   // Map location picker
-  const mapRef = useRef<mapboxgl.Map | null>(null)
+  const mapRef = useRef<maplibregl.Map | null>(null)
   const mapContainerRef = useRef<HTMLDivElement>(null)
-  const markerRef = useRef<mapboxgl.Marker | null>(null)
+  const markerRef = useRef<maplibregl.Marker | null>(null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [results, setResults] = useState<any[]>([])
@@ -102,7 +102,7 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
       if (markerRef.current) {
         markerRef.current.setLngLat([lonNum, latNum])
       } else {
-        markerRef.current = new mapboxgl.Marker({ color: '#10b981', draggable: true })
+        markerRef.current = new maplibregl.Marker({ color: '#10b981', draggable: true })
           .setLngLat([lonNum, latNum])
           .addTo(mapRef.current)
       }
@@ -113,9 +113,8 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return
-    mapboxgl.accessToken = MAPBOX_TOKEN
 
-    const map = new mapboxgl.Map({
+    const map = new maplibregl.Map({
       container: mapContainerRef.current,
       style: DEFAULT_MAP_STYLE,
       center: [
@@ -130,7 +129,7 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
       controls: { polygon: true, trash: true },
       defaultMode: 'simple_select',
     })
-    map.addControl(draw)
+    map.addControl(draw as any)
 
     map.on('load', () => {
       if (formData.boundary && formData.boundary !== 'null') {
@@ -171,7 +170,7 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
       }))
       if (markerRef.current) markerRef.current.setLngLat([lng, lat])
       else {
-        markerRef.current = new mapboxgl.Marker({ color: '#10b981', draggable: true })
+        markerRef.current = new maplibregl.Marker({ color: '#10b981', draggable: true })
           .setLngLat([lng, lat])
           .addTo(map)
         markerRef.current.on('dragend', () => {
