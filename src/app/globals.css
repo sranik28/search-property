@@ -110,3 +110,20 @@ body {
   -webkit-line-clamp: 2;
   line-clamp: 2;
 }
+
+/* =====================
+   Mapbox Draw + MapLibre Compatibility
+   ===================== */
+.mapboxgl-ctrl-group, 
+.maplibregl-ctrl-group {
+  pointer-events: auto !important;
+}
+
+.mapbox-gl-draw_ctrl-draw-btn {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+.mapbox-gl-draw_ctrl-draw-btn:hover {
+  background-color: #f1f5f9 !important;
+}
