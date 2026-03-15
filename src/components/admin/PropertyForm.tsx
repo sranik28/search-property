@@ -1,15 +1,23 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import axios from 'axios'
-import dynamic from 'next/dynamic'
 import { Upload, X, MapPin, Save } from 'lucide-react'
-import { DEFAULT_MAP_STYLE } from '@/lib/mapbox'
-import maplibregl from 'maplibre-gl'
-import MapboxDraw from '@mapbox/mapbox-gl-draw'
-import 'maplibre-gl/dist/maplibre-gl.css'
-import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css'
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents, FeatureGroup } from 'react-leaflet'
+import L from 'leaflet'
+import '@geoman-io/leaflet-geoman-free'
+import 'leaflet/dist/leaflet.css'
+import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css'
+import { DEFAULT_TILE_LAYER, DEFAULT_ATTRIBUTION, GOOGLE_SUBDOMAINS } from '@/lib/mapbox'
+
+// Fix for default marker icons
+const defaultIcon = L.icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+})
 
 interface City {
   id: number
@@ -22,6 +30,104 @@ interface PropertyFormProps {
   cities: City[]
   isEdit?: boolean
   propertyId?: number
+}
+
+// Map Helper Component
+function MapHandler({ 
+  onLocationSelect, 
+  onBoundaryUpdate, 
+  onMapClick,
+  initialBoundary,
+  markerPos,
+  onMarkerDrag
+}: { 
+  onLocationSelect: (lat: number, lng: number) => void,
+  onBoundaryUpdate: (boundary: string) => void,
+  onMapClick: (lat: number, lng: number) => void,
+  initialBoundary?: string,
+  markerPos: [number, number],
+  onMarkerDrag: (lat: number, lng: number) => void
+}) {
+  const map = useMap()
+
+  useEffect(() => {
+    // Initialize Geoman
+    map.pm.addControls({
+      position: 'topleft',
+      drawCircle: false,
+      drawCircleMarker: false,
+      drawText: false,
+      drawMarker: false,
+      drawPolyline: false,
+      cutPolygon: false,
+    })
+
+    if (initialBoundary && initialBoundary !== 'null') {
+      try {
+        const boundaryData = JSON.parse(initialBoundary)
+        if (boundaryData && boundaryData.coordinates) {
+          // GeoJSON [lng, lat] to Leaflet [lat, lng]
+          const latLngs = boundaryData.coordinates[0].map((c: number[]) => [c[1], c[0]])
+          const polygon = L.polygon(latLngs).addTo(map)
+          map.fitBounds(polygon.getBounds(), { padding: [20, 20] })
+        }
+      } catch (e) {
+        console.error('Failed to parse boundary', e)
+      }
+    }
+
+    map.on('pm:create', (e: any) => {
+      const layer = e.layer
+      const geojson = layer.toGeoJSON()
+      onBoundaryUpdate(JSON.stringify(geojson.geometry))
+      
+      // Remove other polygons if we only want one
+      map.eachLayer((l: any) => {
+        if (l instanceof L.Polygon && l !== layer) {
+          map.removeLayer(l)
+        }
+      })
+    })
+
+    map.on('pm:remove', () => {
+      onBoundaryUpdate('null')
+    })
+
+    map.on('pm:update', (e: any) => {
+      const layer = e.layer
+      const geojson = layer.toGeoJSON()
+      onBoundaryUpdate(JSON.stringify(geojson.geometry))
+    })
+
+    return () => {
+      map.off('pm:create')
+      map.off('pm:remove')
+      map.off('pm:update')
+    }
+  }, [map, initialBoundary, onBoundaryUpdate])
+
+  useMapEvents({
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng)
+    },
+  })
+
+  return (
+    <>
+      <Marker 
+        position={markerPos} 
+        draggable={true} 
+        icon={defaultIcon}
+        eventHandlers={{
+          dragend: (e) => {
+            const marker = e.target
+            const position = marker.getLatLng()
+            onMarkerDrag(position.lat, position.lng)
+          }
+        }}
+      />
+    </>
+  )
 }
 
 export default function PropertyForm({ initialData, cities, isEdit, propertyId }: PropertyFormProps) {
@@ -48,8 +154,8 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
     city: (initialData?.city as string) || '',
     citySlug: (initialData?.citySlug as string) || '',
     address: (initialData?.address as string) || '',
-    latitude: String(initialData?.latitude || ''),
-    longitude: String(initialData?.longitude || ''),
+    latitude: String(initialData?.latitude || '23.8103'),
+    longitude: String(initialData?.longitude || '90.4125'),
     bedrooms: String(initialData?.bedrooms || ''),
     bathrooms: String(initialData?.bathrooms || ''),
     area_sqft: String(initialData?.area_sqft || ''),
@@ -59,14 +165,14 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
     boundary: (initialData?.boundary as string) || 'null',
   })
 
-  // Map location picker
-  const mapRef = useRef<maplibregl.Map | null>(null)
-  const mapContainerRef = useRef<HTMLDivElement>(null)
-  const markerRef = useRef<maplibregl.Marker | null>(null)
-
   const [searchQuery, setSearchQuery] = useState('')
   const [results, setResults] = useState<any[]>([])
   const [isSearching, setIsSearching] = useState(false)
+  const [isMounted, setIsMounted] = useState(false)
+
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return
@@ -74,7 +180,6 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
     try {
       const res = await axios.get(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`)
       setResults(res.data)
-      // Auto-select first result if found
       if (res.data?.[0]) {
         const first = res.data[0]
         selectLocation(first.lat, first.lon, first.display_name)
@@ -87,107 +192,29 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
   }
 
   const selectLocation = (lat: string, lon: string, displayName: string) => {
-    const latNum = parseFloat(lat)
-    const lonNum = parseFloat(lon)
-
     setFormData((prev) => ({
       ...prev,
-      latitude: latNum.toFixed(6),
-      longitude: lonNum.toFixed(6),
+      latitude: parseFloat(lat).toFixed(6),
+      longitude: parseFloat(lon).toFixed(6),
     }))
-
-    if (mapRef.current) {
-      mapRef.current.flyTo({ center: [lonNum, latNum], zoom: 16 })
-      
-      if (markerRef.current) {
-        markerRef.current.setLngLat([lonNum, latNum])
-      } else {
-        markerRef.current = new maplibregl.Marker({ color: '#10b981', draggable: true })
-          .setLngLat([lonNum, latNum])
-          .addTo(mapRef.current)
-      }
-    }
     setResults([])
     setSearchQuery(displayName)
   }
 
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return
-
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: DEFAULT_MAP_STYLE,
-      center: [
-        formData.longitude ? parseFloat(formData.longitude) : 90.4125,
-        formData.latitude ? parseFloat(formData.latitude) : 23.8103,
-      ],
-      zoom: 10,
-    })
-
-    const draw = new MapboxDraw({
-      displayControlsDefault: false,
-      controls: { polygon: true, trash: true },
-      defaultMode: 'simple_select',
-    })
-    map.addControl(draw as any)
-
-    map.on('load', () => {
-      if (formData.boundary && formData.boundary !== 'null') {
-        try {
-          const boundaryData = JSON.parse(formData.boundary)
-          if (boundaryData) {
-            draw.add({
-              type: 'Feature',
-              geometry: boundaryData,
-              properties: {},
-            })
-          }
-        } catch (e) {
-          console.error('Failed to parse boundary', e)
-        }
-      }
-    })
-
-    const updateBoundary = () => {
-      const data = draw.getAll()
-      if (data.features.length > 0) {
-        setFormData(prev => ({ ...prev, boundary: JSON.stringify(data.features[0].geometry) }))
-      } else {
-        setFormData(prev => ({ ...prev, boundary: 'null' }))
-      }
-    }
-
-    map.on('draw.create', updateBoundary)
-    map.on('draw.update', updateBoundary)
-    map.on('draw.delete', updateBoundary)
-
-    map.on('click', (e) => {
-      const { lng, lat } = e.lngLat
-      setFormData((prev) => ({
-        ...prev,
-        latitude: lat.toFixed(6),
-        longitude: lng.toFixed(6),
-      }))
-      if (markerRef.current) markerRef.current.setLngLat([lng, lat])
-      else {
-        markerRef.current = new maplibregl.Marker({ color: '#10b981', draggable: true })
-          .setLngLat([lng, lat])
-          .addTo(map)
-        markerRef.current.on('dragend', () => {
-          const pos = markerRef.current!.getLngLat()
-          setFormData((prev) => ({
-            ...prev,
-            latitude: pos.lat.toFixed(6),
-            longitude: pos.lng.toFixed(6),
-          }))
-        })
-      }
-    })
-
-    mapRef.current = map
-    return () => { map.remove(); mapRef.current = null }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const handleMapClick = useCallback((lat: number, lng: number) => {
+    setFormData((prev) => ({
+      ...prev,
+      latitude: lat.toFixed(6),
+      longitude: lng.toFixed(6),
+    }))
   }, [])
+
+  const handleBoundaryUpdate = useCallback((boundary: string) => {
+    setFormData(prev => ({ ...prev, boundary }))
+  }, [])
+
+  const inputClass = 'w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500'
+  const labelClass = 'block text-sm font-semibold text-slate-600 mb-1.5'
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) {
     const { name, value } = e.target
@@ -239,8 +266,10 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
     }
   }
 
-  const inputClass = 'w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500'
-  const labelClass = 'block text-sm font-semibold text-slate-600 mb-1.5'
+  const markerPos = useMemo((): [number, number] => [
+    parseFloat(formData.latitude) || 23.8103,
+    parseFloat(formData.longitude) || 90.4125
+  ], [formData.latitude, formData.longitude])
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
@@ -344,7 +373,7 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
           </div>
 
           {results.length > 0 && (
-            <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
+            <div className="absolute z-[1001] w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden">
               {results.map((res, i) => (
                 <button
                   key={i}
@@ -369,7 +398,26 @@ export default function PropertyForm({ initialData, cities, isEdit, propertyId }
             <input name="longitude" value={formData.longitude} onChange={handleChange} className={inputClass} placeholder="90.4125" required />
           </div>
         </div>
-        <div ref={mapContainerRef} className="w-full h-72 rounded-xl overflow-hidden border border-slate-200" />
+        
+        <div className="w-full h-72 rounded-xl overflow-hidden border border-slate-200 relative">
+          {isMounted && (
+            <MapContainer
+              center={markerPos}
+              zoom={12}
+              className="w-full h-full"
+            >
+              <TileLayer url={DEFAULT_TILE_LAYER} subdomains={GOOGLE_SUBDOMAINS} attribution={DEFAULT_ATTRIBUTION} />
+              <MapHandler 
+                onLocationSelect={(lat, lon) => setFormData(p => ({...p, latitude: lat.toFixed(6), longitude: lon.toFixed(6)}))}
+                onBoundaryUpdate={handleBoundaryUpdate}
+                onMapClick={handleMapClick}
+                onMarkerDrag={handleMapClick}
+                initialBoundary={formData.boundary}
+                markerPos={markerPos}
+              />
+            </MapContainer>
+          )}
+        </div>
       </div>
 
       {/* Images */}
